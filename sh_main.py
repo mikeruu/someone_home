@@ -14,6 +14,12 @@ import subprocess
 from time import sleep
 from threading import Thread
 import configparser
+import requests
+
+
+
+import userdb
+from userdb import usersdata
 
 config = configparser.ConfigParser()
 config.read('config.ini')
@@ -24,18 +30,90 @@ config.read('config.ini')
 ap_host = config['DEFAULT']['ap_host']
 port = config['DEFAULT']['port']
 username = config['DEFAULT']['username']
+username = str(username)
 password = config['DEFAULT']['password']
 userlist = config['DEFAULT']['userlist'] 
 state_command = config['DEFAULT']['state_command']
 POLL_INTERVAL = config['DEFAULT']['POLL_INTERVAL']
- 
 
 logging.basicConfig(
     filename="someone-home.log",
-    level=logging.DEBUG,
+    level=logging.WARN,
     format="%(asctime)s:%(levelname)s:%(message)s"
     )
 logging.getLogger("paramiko").setLevel(logging.ERROR)
+
+
+last_known = []
+
+
+
+def getMacid(userlist):
+    macids = []
+
+    for user in userlist:
+        macids.append(user['macid'])
+    
+    return macids
+
+
+
+class User:
+
+    def __init__(self, username, macid, prowl):
+        self.username = username
+        self.macid = macid
+        self.prowl = prowl
+
+# class Employee(object):
+#     def __init__(self, *initial_data, **kwargs):
+#         for dictionary in initial_data:
+#             for key in dictionary:
+#                 setattr(self, key, dictionary[key])
+#         for key in kwargs:
+#             setattr(self, key, kwargs[key])    
+# 
+# 
+# e = Employee({"name": "abc", "age": 32})
+# print e.name
+
+def userNotify(userlist,message,relay='prowl'):
+
+    for user in userlist:
+        userinfo = find_user('macid',user)
+    
+        if  not userinfo:
+            logging.debug('Could not find user to notify')
+        
+        else:
+            if relay == 'prowl':
+                payload = {'apikey': userinfo['prowl_apikey'] ,'application':'Ecksy', 'event':'Status','description': message,'priority':'-1' }
+                resp = requests.get('http://www.prowlapp.com/publicapi/add', params=payload)
+                logging.debug('Sending notification to: %s', userinfo['username'] )
+    
+
+
+
+ #    for user in userlist:
+#         resp = requests.get("http://www.prowlapp.com/publicapi/add?apikey=1e4d3e382166ec002be27a98d1d4857693c9d873&application=Ecksy&event=Status&description=DISABLED+CAMERAS&priority=-1")
+
+
+
+
+def find_user(key,value):
+    for user in usersdata:
+        if user[key] == value:
+            return user
+    
+    return False
+
+    
+
+
+
+
+
+
 
 def getDump(hostname,port,username,password):
     s = paramiko.SSHClient()
@@ -54,27 +132,45 @@ def cam_state(state):
 
 
 #Returns someone_home = True|False if it matches a user from userlist to the found mac ids.
-def scan_clients(json_dump):
-    found_user = []
+def scan_clients(json_dump,macids):
+    users_home = []
 	# there are mutliple channels in the wifi, must scan all if them for mac address
     ch_list = json_dump['vap_table']
     
-    #always start a can with no one home.
-    someone_home = False
     #The AP will return a list of channels
     for ch in ch_list:
         cl_list = ch['sta_table']
         #The sta table contains the list of clients connected to the channel
         for cl in cl_list:
-            logging.debug('Found these mac ids: %s', cl['mac'])
-            if cl['mac'] in userlist:
-            #If one of the macids are matched in the list = someone is home
-                someone_home = True
+            logging.debug('Wifi Clients found: %s', cl['mac'])
+            
+            if cl['mac'] in macids:
+                #Only add to the list if it doesnt exist.
+                if cl['mac'] not in users_home:
+                    users_home.append(cl['mac'])
+                               
+                logging.debug('Matched this user: %s', cl['mac'])
 					
-    return someone_home
+    return users_home
+
+
+
 	
-def change_state(someone_home):
-    print someone_home
+def change_state(users_home):
+    global last_known
+
+    # if we have matched ids in the list it means someone is home
+    if not users_home:
+        someone_home = False
+ 
+    else:
+        last_known = users_home
+        someone_home = True
+
+        
+    logging.info('Someone home: %s', someone_home )
+    logging.debug('last known user at home: %s' , last_known )
+    
 #Check current state in file
     with open("state.txt") as f:
         current_state = f.read()
@@ -83,6 +179,8 @@ def change_state(someone_home):
     if someone_home == True and current_state == 'All-Detect':
         logging.info('Someone is home, DISABLING Cams')
         cam_state('All-Monitor')
+        message = 'DISABLED CAMS'
+        userNotify(users_home,message)
         with open('state.txt', 'w') as the_file:
              the_file.write('All-Monitor')
 
@@ -90,6 +188,8 @@ def change_state(someone_home):
     elif someone_home == False and current_state == 'All-Monitor':
         logging.info('Nobody is home, ENABLING Cams')
         cam_state('All-Detect')
+        message = 'ENABLED CAMS'
+        userNotify(last_known,message)
         with open('state.txt', 'w') as the_file:
             the_file.write('All-Detect')
             
@@ -102,10 +202,11 @@ try:
 
     while True:
         
+        macids = getMacid(usersdata)
         mca_dump = getDump(str(ap_host),int(port),str(username),str(password))
         json_dump = json.loads(mca_dump)
-        someone_home = scan_clients(json_dump)
-        change_state(someone_home)
+        users_home = scan_clients(json_dump,macids)
+        change_state(users_home)
         # Wait 30 seconds between scans
         sleep(int(POLL_INTERVAL))
 
