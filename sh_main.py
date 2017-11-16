@@ -58,25 +58,6 @@ def getMacid(userlist):
 
 
 
-class User:
-
-    def __init__(self, username, macid, prowl):
-        self.username = username
-        self.macid = macid
-        self.prowl = prowl
-
-# class Employee(object):
-#     def __init__(self, *initial_data, **kwargs):
-#         for dictionary in initial_data:
-#             for key in dictionary:
-#                 setattr(self, key, dictionary[key])
-#         for key in kwargs:
-#             setattr(self, key, kwargs[key])    
-# 
-# 
-# e = Employee({"name": "abc", "age": 32})
-# print e.name
-
 def userNotify(userlist,message,relay='prowl'):
 
     for user in userlist:
@@ -91,12 +72,6 @@ def userNotify(userlist,message,relay='prowl'):
                 resp = requests.get('http://www.prowlapp.com/publicapi/add', params=payload)
                 logging.debug('Sending notification to: %s', userinfo['username'] )
     
-
-
-
- #    for user in userlist:
-#         resp = requests.get("http://www.prowlapp.com/publicapi/add?apikey=1e4d3e382166ec002be27a98d1d4857693c9d873&application=Ecksy&event=Status&description=DISABLED+CAMERAS&priority=-1")
-
 
 
 
