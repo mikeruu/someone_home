@@ -16,8 +16,6 @@ from threading import Thread
 import configparser
 import requests
 
-
-
 import userdb
 from userdb import usersdata
 
@@ -25,9 +23,9 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 
-
-
 ap_host = config['DEFAULT']['ap_host']
+#get a list of hosts of the access poits
+ap_host = ap_host.split(',')
 port = config['DEFAULT']['port']
 username = config['DEFAULT']['username']
 username = str(username)
@@ -37,14 +35,19 @@ state_command = config['DEFAULT']['state_command']
 POLL_INTERVAL = config['DEFAULT']['POLL_INTERVAL']
 
 logging.basicConfig(
-    filename="someone-home.log",
-    level=logging.WARN,
+    filename="/var/log/someone_home/someone-home.log",
+    level=logging.ERROR,
     format="%(asctime)s:%(levelname)s:%(message)s"
     )
-logging.getLogger("paramiko").setLevel(logging.ERROR)
+    
+logging.getLogger(__name__)
+
+logger = logging.getLogger('LOG')
+
 
 
 last_known = []
+
 
 
 
@@ -82,23 +85,30 @@ def find_user(key,value):
     
     return False
 
-    
 
-
-
-
-
-
-
+#get json dump from ubiquiti AP
 def getDump(hostname,port,username,password):
     s = paramiko.SSHClient()
     s.load_system_host_keys()
-    s.connect(hostname, port, username, password)
-    stdin, stdout, stderr = s.exec_command('mca-dump')
+    output = {}
+    json_dump = {}
+     
+    try:
+        hostname
+        s.connect(hostname, port, username, password)
+        stdin, stdout, stderr = s.exec_command('mca-dump')
+        output = stdout.read()
+        s.close()
+        output = output.replace(" ","") 
+        logging.debug('getDump.output = %s',output)
+    except:
+        output = None
+        logging.error('Failed on getting host list from AP in getDump function')
     
-    output = stdout.read()
-    s.close()
-    return output
+    json_dump = json.loads(output)
+    
+    logging.debug('json from AP:     %s',json_dump)
+    return json_dump
 
 
 def cam_state(state):
@@ -113,18 +123,25 @@ def scan_clients(json_dump,macids):
     ch_list = json_dump['vap_table']
     
     #The AP will return a list of channels
-    for ch in ch_list:
-        cl_list = ch['sta_table']
-        #The sta table contains the list of clients connected to the channel
-        for cl in cl_list:
-            logging.debug('Wifi Clients found: %s', cl['mac'])
-            
-            if cl['mac'] in macids:
-                #Only add to the list if it doesnt exist.
-                if cl['mac'] not in users_home:
-                    users_home.append(cl['mac'])
-                               
-                logging.debug('Matched this user: %s', cl['mac'])
+
+    
+    if not ch_list:
+        users_home = None
+    
+    else:
+		for ch in ch_list:
+			cl_list = ch['sta_table']
+			#The sta table contains the list of clients connected to the channel
+			for cl in cl_list:
+				logging.info('Wifi Clients found: %s', cl['mac'])
+				if cl['mac'] in macids:
+					#Only add to the list if it doesnt exist.
+					if cl['mac'] not in users_home:
+						users_home.append(cl['mac'])
+							   
+					logging.info('Matched this user: %s', cl['mac'])
+					
+    # logging.debug('users_home: %s',users_home)
 					
     return users_home
 
@@ -133,7 +150,7 @@ def scan_clients(json_dump,macids):
 	
 def change_state(users_home):
     global last_known
-
+    logging.info('users_home: %s',users_home)
     # if we have matched ids in the list it means someone is home
     if not users_home:
         someone_home = False
@@ -172,20 +189,29 @@ def change_state(users_home):
     return False
 		
 
-try:
 
+while True:
+	
+	users_home = ''
+	logger.info('starting a new check')
+	userlist = []
+	macids = getMacid(usersdata)
+	
+	for ap in ap_host:
+	    json_dump = getDump(str(ap),int(port),str(username),str(password))
+	    logger.debug('json_dump = %s', json_dump)
+	
+	    if json_dump != None:
+	        users_home = scan_clients(json_dump,macids)
 
-    while True:
-        
-        macids = getMacid(usersdata)
-        mca_dump = getDump(str(ap_host),int(port),str(username),str(password))
-        json_dump = json.loads(mca_dump)
-        users_home = scan_clients(json_dump,macids)
-        change_state(users_home)
-        # Wait 30 seconds between scans
-        sleep(int(POLL_INTERVAL))
+            userlist = userlist + users_home	    
+            logging.info('users found userlist %s',userlist)
+	
+	change_state(userlist)
+	# Wait POLL_INTERVAL seconds between scans
+	sleep(int(POLL_INTERVAL))
 
-except KeyboardInterrupt:
-    # On a keyboard interrupt signal threads to exit
-    stop = True
-    exit()
+# except KeyboardInterrupt:
+#     # On a keyboard interrupt signal threads to exit
+#     stop = True
+#     exit()
